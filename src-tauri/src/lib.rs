@@ -96,7 +96,7 @@ async fn clear_agent_info(
 // ── Socket connect helper (non-async, spawns task) ───────────────────────────
 
 fn connect_socket(app: tauri::AppHandle, handle: SocketHandle, user_id: String, api_url: String) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         // Disconnect existing socket
         {
             let mut guard = handle.lock().await;
@@ -117,6 +117,12 @@ fn connect_socket(app: tauri::AppHandle, handle: SocketHandle, user_id: String, 
     });
 }
 
+// ── Notification helper ───────────────────────────────────────────────────────
+
+fn show_notification(app: tauri::AppHandle, title: String, body: String) {
+    let _ = app.notification().builder().title(&title).body(&body).show();
+}
+
 // ── Socket ────────────────────────────────────────────────────────────────────
 
 async fn build_socket(
@@ -133,27 +139,20 @@ async fn build_socket(
             let app = app_notif.clone();
             Box::pin(async move {
                 let (title, body) = parse_notification_payload(&payload);
-                let _ = app.notification().builder().title(&title).body(&body).show();
-
                 let unread = app.state::<UnreadCount>();
                 let count = unread.fetch_add(1, Ordering::SeqCst) + 1;
                 set_dock_badge(&app, count);
+                show_notification(app, title, body);
             })
         })
         .on("newConversation", move |payload: Payload, _| {
             let app = app_convo.clone();
             Box::pin(async move {
                 let body = extract_customer_name(&payload);
-                let _ = app
-                    .notification()
-                    .builder()
-                    .title("New Ticket")
-                    .body(&body)
-                    .show();
-
                 let unread = app.state::<UnreadCount>();
                 let count = unread.fetch_add(1, Ordering::SeqCst) + 1;
                 set_dock_badge(&app, count);
+                show_notification(app, "New Ticket".to_string(), body);
             })
         })
         .connect()
@@ -334,14 +333,26 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app, event| {
-            // When app is re-opened (notification click / dock click) with hidden window
-            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
-                if !has_visible_windows {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
+            match event {
+                // Dock icon clicked with hidden window
+                tauri::RunEvent::Reopen { has_visible_windows, .. } => {
+                    if !has_visible_windows {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
                     }
                 }
+                // App became active (notification click, app switcher, etc.)
+                tauri::RunEvent::Resumed => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        if !window.is_visible().unwrap_or(true) {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                }
+                _ => {}
             }
         });
 }
