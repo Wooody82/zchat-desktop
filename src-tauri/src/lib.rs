@@ -10,6 +10,7 @@ use tauri::{
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_store::StoreExt;
+use tauri_plugin_updater::UpdaterExt;
 use tokio::sync::Mutex;
 
 use rust_socketio::{asynchronous::ClientBuilder, Payload};
@@ -30,6 +31,25 @@ fn set_dock_badge(app: &tauri::AppHandle, count: u32) {
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn check_for_updates(app: tauri::AppHandle) -> Result<String, String> {
+    match app.updater().map_err(|e| e.to_string())?.check().await {
+        Ok(Some(update)) => Ok(format!("Update available: v{}", update.version)),
+        Ok(None) => Ok("You're on the latest version.".to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    if let Some(update) = updater.check().await.map_err(|e| e.to_string())? {
+        update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+        app.restart();
+    }
+    Ok(())
+}
 
 #[tauri::command]
 fn save_workspace(app: tauri::AppHandle, url: String) -> Result<(), String> {
@@ -214,6 +234,8 @@ pub fn run() {
             Some(vec![]),
         ))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(SocketHandle::default())
         .manage(UnreadCount::default())
         .setup(|app| {
@@ -267,8 +289,10 @@ pub fn run() {
 
             let show =
                 MenuItem::with_id(app, "show", "Show ZChat", true, None::<&str>)?;
+            let updates =
+                MenuItem::with_id(app, "updates", "Check for Updates…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &updates, &quit])?;
 
             TrayIconBuilder::new()
                 .icon(tray_icon)
@@ -281,6 +305,35 @@ pub fn run() {
                                 let _ = window.show();
                                 let _ = window.set_focus();
                             }
+                        }
+                        "updates" => {
+                            let app = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let updater = match app.updater() {
+                                    Ok(u) => u,
+                                    Err(_) => return,
+                                };
+                                match updater.check().await {
+                                    Ok(Some(update)) => {
+                                        let _ = app.notification()
+                                            .builder()
+                                            .title("Update Available")
+                                            .body(&format!("v{} is available. Downloading…", update.version))
+                                            .show();
+                                        if update.download_and_install(|_, _| {}, || {}).await.is_ok() {
+                                            app.restart();
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        let _ = app.notification()
+                                            .builder()
+                                            .title("ZChat")
+                                            .body("You're on the latest version.")
+                                            .show();
+                                    }
+                                    Err(_) => {}
+                                }
+                            });
                         }
                         "quit" => app.exit(0),
                         _ => {}
@@ -329,6 +382,8 @@ pub fn run() {
             save_workspace,
             set_agent_info,
             clear_agent_info,
+            check_for_updates,
+            install_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
