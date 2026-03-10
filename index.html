@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ZChat</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <div class="logo-wrap">
+          <div class="logo-icon">Z</div>
+          <div>
+            <div class="logo-name">ZChat</div>
+            <div class="logo-sub">Agent Desktop</div>
+          </div>
+        </div>
+        <p class="description">Enter your workspace URL to get started</p>
+        <form id="workspace-form">
+          <input
+            id="url-input"
+            type="text"
+            placeholder="cs.yourcompany.com"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button type="submit" id="submit-btn">Open Workspace</button>
+        </form>
+        <p id="error-msg" class="error"></p>
+        <p class="hint">You only need to do this once</p>
+      </div>
+    </div>
+  </body>
+</html>

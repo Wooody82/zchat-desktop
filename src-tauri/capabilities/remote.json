@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-access",
+  "description": "Allow the loaded workspace URL to invoke agent commands",
+  "remote": {
+    "urls": ["http://localhost:*", "http://localhost:*/**", "https://**", "http://**"]
+  },
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}
