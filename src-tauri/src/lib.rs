@@ -25,8 +25,16 @@ const TRAY_ICON: &[u8] = include_bytes!("../icons/32x32.png");
 
 fn set_dock_badge(app: &tauri::AppHandle, count: u32) {
     if let Some(window) = app.get_webview_window("main") {
-        let label: Option<String> = if count > 0 { Some(count.to_string()) } else { None };
-        let _ = window.set_badge_label(label);
+        #[cfg(target_os = "macos")]
+        {
+            let label: Option<String> = if count > 0 { Some(count.to_string()) } else { None };
+            let _ = window.set_badge_label(label);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let count_opt: Option<i64> = if count > 0 { Some(count as i64) } else { None };
+            let _ = window.set_badge_count(count_opt);
+        }
     }
 }
 
@@ -389,19 +397,19 @@ pub fn run() {
         .expect("error while running tauri application")
         .run(|app, event| {
             match event {
-                // Dock icon clicked with hidden window
-                tauri::RunEvent::Reopen { has_visible_windows, .. } => {
-                    if !has_visible_windows {
-                        if let Some(window) = app.get_webview_window("main") {
+                // App became active (notification click, app switcher, etc.) — macOS only
+                tauri::RunEvent::Resumed => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        if !window.is_visible().unwrap_or(true) {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
                     }
                 }
-                // App became active (notification click, app switcher, etc.)
-                tauri::RunEvent::Resumed => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        if !window.is_visible().unwrap_or(true) {
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { has_visible_windows, .. } => {
+                    if !has_visible_windows {
+                        if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
