@@ -1,6 +1,6 @@
 [package]
 name = "zchat-desktop"
-version = "0.1.6"
+version = "0.1.7"
 description = "ZChat Agent Desktop"
 authors = ["you"]
 edition = "2021"
