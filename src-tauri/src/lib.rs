@@ -14,9 +14,12 @@ use tokio::sync::{watch, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use futures_util::{SinkExt, StreamExt};
 
+use std::sync::atomic::AtomicBool;
+
 type StopTx = watch::Sender<bool>;
 type SocketHandle = Arc<Mutex<Option<StopTx>>>;
 type UnreadCount = Arc<AtomicU32>;
+type WindowFocused = Arc<AtomicBool>;
 
 const TRAY_ICON: &[u8] = include_bytes!("../icons/32x32.png");
 
@@ -181,10 +184,13 @@ fn handle_message(app: &tauri::AppHandle, text: &str) {
                 .or_else(|| notif["body"].as_str())
                 .unwrap_or("")
                 .to_string();
+            let focused = app.state::<WindowFocused>().load(Ordering::SeqCst);
             let unread = app.state::<UnreadCount>();
             let count = unread.fetch_add(1, Ordering::SeqCst) + 1;
             set_dock_badge(app, count);
-            show_notification(app.clone(), title, body);
+            if !focused {
+                show_notification(app.clone(), title, body);
+            }
         }
         Some("newConversation") => {
             let name = data["data"]["customer_name"]
@@ -192,10 +198,13 @@ fn handle_message(app: &tauri::AppHandle, text: &str) {
                 .or_else(|| data["data"]["customerName"].as_str())
                 .map(|n| format!("New conversation from {}", n))
                 .unwrap_or_else(|| "New conversation started".to_string());
+            let focused = app.state::<WindowFocused>().load(Ordering::SeqCst);
             let unread = app.state::<UnreadCount>();
             let count = unread.fetch_add(1, Ordering::SeqCst) + 1;
             set_dock_badge(app, count);
-            show_notification(app.clone(), "New Ticket".to_string(), name);
+            if !focused {
+                show_notification(app.clone(), "New Ticket".to_string(), name);
+            }
         }
         _ => {}
     }
@@ -219,6 +228,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(SocketHandle::default())
         .manage(UnreadCount::default())
+        .manage(WindowFocused::default())
         .setup(|app| {
             use tauri_plugin_autostart::ManagerExt;
             let _ = app.autolaunch().enable();
@@ -316,11 +326,16 @@ pub fn run() {
                     api.prevent_close();
                     let _ = window.hide();
                 }
-                tauri::WindowEvent::Focused(true) => {
+                tauri::WindowEvent::Focused(focused) => {
                     let app = window.app_handle();
-                    if let Some(unread) = app.try_state::<UnreadCount>() {
-                        unread.store(0, Ordering::SeqCst);
-                        set_dock_badge(app, 0);
+                    if let Some(focused_state) = app.try_state::<WindowFocused>() {
+                        focused_state.store(*focused, Ordering::SeqCst);
+                    }
+                    if *focused {
+                        if let Some(unread) = app.try_state::<UnreadCount>() {
+                            unread.store(0, Ordering::SeqCst);
+                            set_dock_badge(app, 0);
+                        }
                     }
                 }
                 _ => {}
