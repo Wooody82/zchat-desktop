@@ -8,10 +8,8 @@ use tauri::{
     Manager, Url, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_autostart::MacosLauncher;
-use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_store::StoreExt;
-use tauri_plugin_updater::UpdaterExt;
 use tokio::sync::Mutex;
 
 use rust_socketio::{asynchronous::ClientBuilder, Payload};
@@ -26,39 +24,12 @@ const TRAY_ICON: &[u8] = include_bytes!("../icons/32x32.png");
 
 fn set_dock_badge(app: &tauri::AppHandle, count: u32) {
     if let Some(window) = app.get_webview_window("main") {
-        #[cfg(target_os = "macos")]
-        {
-            let label: Option<String> = if count > 0 { Some(count.to_string()) } else { None };
-            let _ = window.set_badge_label(label);
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let count_opt: Option<i64> = if count > 0 { Some(count as i64) } else { None };
-            let _ = window.set_badge_count(count_opt);
-        }
+        let label: Option<String> = if count > 0 { Some(count.to_string()) } else { None };
+        let _ = window.set_badge_label(label);
     }
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
-
-#[tauri::command]
-async fn check_for_updates(app: tauri::AppHandle) -> Result<String, String> {
-    match app.updater().map_err(|e| e.to_string())?.check().await {
-        Ok(Some(update)) => Ok(format!("Update available: v{}", update.version)),
-        Ok(None) => Ok("You're on the latest version.".to_string()),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-#[tauri::command]
-async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
-    let updater = app.updater().map_err(|e| e.to_string())?;
-    if let Some(update) = updater.check().await.map_err(|e| e.to_string())? {
-        update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
-        app.restart();
-    }
-    Ok(())
-}
 
 #[tauri::command]
 fn save_workspace(app: tauri::AppHandle, url: String) -> Result<(), String> {
@@ -134,7 +105,7 @@ fn connect_socket(app: tauri::AppHandle, handle: SocketHandle, user_id: String, 
             }
         }
 
-        match build_socket(app.clone(), api_url.clone(), user_id.clone()).await {
+        match build_socket(app.clone(), api_url, user_id).await {
             Ok(client) => {
                 let mut g = handle.lock().await;
                 *g = Some(client);
@@ -149,23 +120,7 @@ fn connect_socket(app: tauri::AppHandle, handle: SocketHandle, user_id: String, 
 // ── Notification helper ───────────────────────────────────────────────────────
 
 fn show_notification(app: tauri::AppHandle, title: String, body: String) {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = app; // suppress unused warning
-        let safe_title = title.replace('"', "'");
-        let safe_body = body.replace('"', "'");
-        let _ = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(format!(
-                "display notification \"{}\" with title \"{}\"",
-                safe_body, safe_title
-            ))
-            .spawn();
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = app.notification().builder().title(&title).body(&body).show();
-    }
+    let _ = app.notification().builder().title(&title).body(&body).show();
 }
 
 // ── Socket ────────────────────────────────────────────────────────────────────
@@ -180,9 +135,6 @@ async fn build_socket(
     let uid = user_id.clone();
 
     let socket = ClientBuilder::new(&api_url)
-        .reconnect(true)
-        .reconnect_delay(2000, 10000)
-        .max_reconnect_attempts(u8::MAX)
         .on("newNotification", move |payload: Payload, _| {
             let app = app_notif.clone();
             Box::pin(async move {
@@ -262,9 +214,6 @@ pub fn run() {
             Some(vec![]),
         ))
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
         .manage(SocketHandle::default())
         .manage(UnreadCount::default())
         .setup(|app| {
@@ -318,10 +267,8 @@ pub fn run() {
 
             let show =
                 MenuItem::with_id(app, "show", "Show ZChat", true, None::<&str>)?;
-            let updates =
-                MenuItem::with_id(app, "updates", "Check for Updates…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &updates, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
 
             TrayIconBuilder::new()
                 .icon(tray_icon)
@@ -334,39 +281,6 @@ pub fn run() {
                                 let _ = window.show();
                                 let _ = window.set_focus();
                             }
-                        }
-                        "updates" => {
-                            let app = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                let updater = match app.updater() {
-                                    Ok(u) => u,
-                                    Err(e) => {
-                                        app.dialog().message(format!("Could not initialize updater: {}", e))
-                                            .kind(MessageDialogKind::Error).title("ZChat").blocking_show();
-                                        return;
-                                    }
-                                };
-                                match updater.check().await {
-                                    Ok(Some(update)) => {
-                                        app.dialog()
-                                            .message(format!("Version {} is available. Downloading and installing…", update.version))
-                                            .kind(MessageDialogKind::Info)
-                                            .title("Update Available")
-                                            .blocking_show();
-                                        if update.download_and_install(|_, _| {}, || {}).await.is_ok() {
-                                            app.restart();
-                                        }
-                                    }
-                                    Ok(None) => {
-                                        app.dialog().message("You're on the latest version.")
-                                            .kind(MessageDialogKind::Info).title("ZChat").blocking_show();
-                                    }
-                                    Err(e) => {
-                                        app.dialog().message(format!("Update check failed: {}", e))
-                                            .kind(MessageDialogKind::Error).title("ZChat").blocking_show();
-                                    }
-                                }
-                            });
                         }
                         "quit" => app.exit(0),
                         _ => {}
@@ -415,26 +329,24 @@ pub fn run() {
             save_workspace,
             set_agent_info,
             clear_agent_info,
-            check_for_updates,
-            install_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app, event| {
             match event {
-                // App became active (notification click, app switcher, etc.) — macOS only
-                tauri::RunEvent::Resumed => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        if !window.is_visible().unwrap_or(true) {
+                // Dock icon clicked with hidden window
+                tauri::RunEvent::Reopen { has_visible_windows, .. } => {
+                    if !has_visible_windows {
+                        if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
                     }
                 }
-                #[cfg(target_os = "macos")]
-                tauri::RunEvent::Reopen { has_visible_windows, .. } => {
-                    if !has_visible_windows {
-                        if let Some(window) = app.get_webview_window("main") {
+                // App became active (notification click, app switcher, etc.)
+                tauri::RunEvent::Resumed => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        if !window.is_visible().unwrap_or(true) {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
