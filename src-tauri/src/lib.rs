@@ -8,6 +8,7 @@ use tauri::{
     Manager, Url, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_store::StoreExt;
 use tauri_plugin_updater::UpdaterExt;
@@ -133,7 +134,7 @@ fn connect_socket(app: tauri::AppHandle, handle: SocketHandle, user_id: String, 
             }
         }
 
-        match build_socket(app.clone(), api_url, user_id).await {
+        match build_socket(app.clone(), api_url.clone(), user_id.clone()).await {
             Ok(client) => {
                 let mut g = handle.lock().await;
                 *g = Some(client);
@@ -163,6 +164,9 @@ async fn build_socket(
     let uid = user_id.clone();
 
     let socket = ClientBuilder::new(&api_url)
+        .reconnect(true)
+        .reconnect_delay(2000, 10000)
+        .max_reconnect_attempts(u8::MAX)
         .on("newNotification", move |payload: Payload, _| {
             let app = app_notif.clone();
             Box::pin(async move {
@@ -242,6 +246,7 @@ pub fn run() {
             Some(vec![]),
         ))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(SocketHandle::default())
@@ -319,27 +324,35 @@ pub fn run() {
                             tauri::async_runtime::spawn(async move {
                                 let updater = match app.updater() {
                                     Ok(u) => u,
-                                    Err(_) => return,
+                                    Err(e) => {
+                                        app.dialog().message(format!("Could not initialize updater: {}", e))
+                                            .kind(MessageDialogKind::Error).title("ZChat").blocking_show();
+                                        return;
+                                    }
                                 };
                                 match updater.check().await {
                                     Ok(Some(update)) => {
-                                        let _ = app.notification()
-                                            .builder()
+                                        let yes = app.dialog()
+                                            .message(format!("Version {} is available. Install now?", update.version))
+                                            .kind(MessageDialogKind::Info)
                                             .title("Update Available")
-                                            .body(&format!("v{} is available. Downloading…", update.version))
-                                            .show();
-                                        if update.download_and_install(|_, _| {}, || {}).await.is_ok() {
-                                            app.restart();
+                                            .ok_button_label("Install")
+                                            .cancel_button_label("Later")
+                                            .blocking_show();
+                                        if yes {
+                                            if update.download_and_install(|_, _| {}, || {}).await.is_ok() {
+                                                app.restart();
+                                            }
                                         }
                                     }
                                     Ok(None) => {
-                                        let _ = app.notification()
-                                            .builder()
-                                            .title("ZChat")
-                                            .body("You're on the latest version.")
-                                            .show();
+                                        app.dialog().message("You're on the latest version.")
+                                            .kind(MessageDialogKind::Info).title("ZChat").blocking_show();
                                     }
-                                    Err(_) => {}
+                                    Err(e) => {
+                                        app.dialog().message(format!("Update check failed: {}", e))
+                                            .kind(MessageDialogKind::Error).title("ZChat").blocking_show();
+                                    }
                                 }
                             });
                         }
