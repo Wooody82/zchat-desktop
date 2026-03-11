@@ -332,17 +332,13 @@ pub fn run() {
                                 };
                                 match updater.check().await {
                                     Ok(Some(update)) => {
-                                        let yes = app.dialog()
-                                            .message(format!("Version {} is available. Install now?", update.version))
+                                        app.dialog()
+                                            .message(format!("Version {} is available. Downloading and installing…", update.version))
                                             .kind(MessageDialogKind::Info)
                                             .title("Update Available")
-                                            .ok_button_label("Install")
-                                            .cancel_button_label("Later")
                                             .blocking_show();
-                                        if yes {
-                                            if update.download_and_install(|_, _| {}, || {}).await.is_ok() {
-                                                app.restart();
-                                            }
+                                        if update.download_and_install(|_, _| {}, || {}).await.is_ok() {
+                                            app.restart();
                                         }
                                     }
                                     Ok(None) => {
