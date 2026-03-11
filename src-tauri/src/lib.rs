@@ -10,6 +10,7 @@ use tauri::{
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_store::StoreExt;
+use tauri_plugin_updater::UpdaterExt;
 use tokio::sync::{watch, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use futures_util::{SinkExt, StreamExt};
@@ -247,6 +248,8 @@ pub fn run() {
             Some(vec![]),
         ))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(SocketHandle::default())
         .manage(UnreadCount::default())
         .manage(WindowFocused::default())
@@ -301,8 +304,9 @@ pub fn run() {
 
             let show = MenuItem::with_id(app, "show", "Show ZChat", true, None::<&str>)?;
             let change = MenuItem::with_id(app, "change", "Change Workspace", true, None::<&str>)?;
+            let update = MenuItem::with_id(app, "update", "Check for Updates", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &change, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &change, &update, &quit])?;
 
             TrayIconBuilder::new()
                 .icon(tray_icon)
@@ -322,6 +326,33 @@ pub fn run() {
                                 let _ = store.save();
                             }
                             app.restart();
+                        }
+                        "update" => {
+                            let app = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let updater = match app.updater() {
+                                    Ok(u) => u,
+                                    Err(_) => return,
+                                };
+                                match updater.check().await {
+                                    Ok(Some(update)) => {
+                                        let _ = app.notification().builder()
+                                            .title("Update Available")
+                                            .body(&format!("v{} is available. Downloading…", update.version))
+                                            .show();
+                                        if update.download_and_install(|_, _| {}, || {}).await.is_ok() {
+                                            app.restart();
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        let _ = app.notification().builder()
+                                            .title("ZChat")
+                                            .body("You're on the latest version.")
+                                            .show();
+                                    }
+                                    Err(_) => {}
+                                }
+                            });
                         }
                         "quit" => app.exit(0),
                         _ => {}
