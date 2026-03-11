@@ -35,12 +35,25 @@ fn set_dock_badge(app: &tauri::AppHandle, count: u32) {
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-fn save_workspace(app: tauri::AppHandle, url: String) -> Result<(), String> {
+async fn save_workspace(app: tauri::AppHandle, url: String) -> Result<(), String> {
     let full_url = if url.starts_with("http://") || url.starts_with("https://") {
         url
     } else {
         format!("https://{}", url)
     };
+    let base = full_url.trim_end_matches('/');
+
+    // Validate it's a ZChat workspace
+    let html = reqwest::get(base)
+        .await
+        .map_err(|_| "Could not reach this URL. Please check and try again.".to_string())?
+        .text()
+        .await
+        .map_err(|_| "Could not read response.".to_string())?;
+
+    if !html.contains("zchat-workspace") {
+        return Err("This doesn't appear to be a ZChat workspace.".to_string());
+    }
 
     let store = app.store("settings.json").map_err(|e| e.to_string())?;
     store.set("workspaceUrl", full_url.clone());
@@ -279,8 +292,9 @@ pub fn run() {
                 .expect("Failed to load tray icon");
 
             let show = MenuItem::with_id(app, "show", "Show ZChat", true, None::<&str>)?;
+            let change = MenuItem::with_id(app, "change", "Change Workspace", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &change, &quit])?;
 
             TrayIconBuilder::new()
                 .icon(tray_icon)
@@ -293,6 +307,13 @@ pub fn run() {
                                 let _ = window.show();
                                 let _ = window.set_focus();
                             }
+                        }
+                        "change" => {
+                            if let Ok(store) = app.store("settings.json") {
+                                store.delete("workspaceUrl");
+                                let _ = store.save();
+                            }
+                            app.restart();
                         }
                         "quit" => app.exit(0),
                         _ => {}
