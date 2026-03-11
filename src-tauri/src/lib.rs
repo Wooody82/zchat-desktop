@@ -149,7 +149,23 @@ fn connect_socket(app: tauri::AppHandle, handle: SocketHandle, user_id: String, 
 // ── Notification helper ───────────────────────────────────────────────────────
 
 fn show_notification(app: tauri::AppHandle, title: String, body: String) {
-    let _ = app.notification().builder().title(&title).body(&body).show();
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app; // suppress unused warning
+        let safe_title = title.replace('"', "'");
+        let safe_body = body.replace('"', "'");
+        let _ = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(format!(
+                "display notification \"{}\" with title \"{}\"",
+                safe_body, safe_title
+            ))
+            .spawn();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app.notification().builder().title(&title).body(&body).show();
+    }
 }
 
 // ── Socket ────────────────────────────────────────────────────────────────────
