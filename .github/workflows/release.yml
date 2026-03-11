@@ -38,11 +38,22 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Write signing key
+        shell: bash
+        run: |
+          if printf '%s' "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" | base64 --decode > "$RUNNER_TEMP/signing.key" 2>/dev/null; then
+            echo "Decoded base64 signing key into $RUNNER_TEMP/signing.key"
+          else
+            printf '%s' "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" > "$RUNNER_TEMP/signing.key"
+            echo "Wrote raw signing key into $RUNNER_TEMP/signing.key"
+          fi
+          chmod 600 "$RUNNER_TEMP/signing.key"
+
       - name: Build and release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ runner.temp }}/signing.key
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
